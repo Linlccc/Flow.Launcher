@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Timers;
 using System.Windows;
@@ -35,14 +36,10 @@ namespace Flow.Launcher
         [STAThread]
         public static void Main()
         {
-            if (SingleInstance<App>.InitializeAsFirstInstance(Unique))
-            {
-                using (var application = new App())
-                {
-                    application.InitializeComponent();
-                    application.Run();
-                }
-            }
+            if (!SingleInstance<App>.InitializeAsFirstInstance(Unique)) return;
+            using App application = new();
+            application.InitializeComponent();
+            application.Run();
         }
 
         private async void OnStartupAsync(object sender, StartupEventArgs e)
@@ -75,13 +72,13 @@ namespace Flow.Launcher
                 Http.Proxy = _settings.Proxy;
 
                 await PluginManager.InitializePluginsAsync(API);
-                var window = new MainWindow(_settings, _mainVM);
+                MainWindow window = new MainWindow(_settings, _mainVM);
 
                 Log.Info($"|App.OnStartup|Dependencies Info:{ErrorReporting.DependenciesInfo()}");
 
                 Current.MainWindow = window;
                 Current.MainWindow.Title = Constant.FlowLauncher;
-                
+
                 HotKeyMapper.Initialize(_mainVM);
 
                 // happlebao todo temp fix for instance code logic
@@ -132,12 +129,12 @@ namespace Flow.Launcher
                 if (_settings.AutoUpdates)
                 {
                     // check udpate every 5 hours
-                    var timer = new Timer(1000 * 60 * 60 * 5);
-                    timer.Elapsed += async (s, e) =>
-                    {
-                        await _updater.UpdateAppAsync(API);
-                    };
-                    timer.Start();
+                    //Timer timer = new Timer(1000 * 60 * 60 * 5);
+                    //timer.Elapsed += async (s, e) =>
+                    //{
+                    //    await _updater.UpdateAppAsync(API);
+                    //};
+                    //timer.Start();
 
                     // check updates on startup
                     await _updater.UpdateAppAsync(API);

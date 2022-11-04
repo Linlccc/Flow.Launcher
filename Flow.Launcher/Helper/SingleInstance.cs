@@ -3,8 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization.Formatters;
 using System.Security;
 using System.Text;
@@ -15,7 +15,7 @@ using System.Windows.Threading;
 
 // http://blogs.microsoft.co.il/arik/2010/05/28/wpf-single-instance-application/
 // modified to allow single instace restart
-namespace Flow.Launcher.Helper 
+namespace Flow.Launcher.Helper
 {
     internal enum WM
     {
@@ -162,7 +162,7 @@ namespace Flow.Launcher.Helper
                 {
                     throw new Win32Exception();
                 }
-                var result = new string[numArgs];
+                string[] result = new string[numArgs];
 
                 for (int i = 0; i < numArgs; i++)
                 {
@@ -181,97 +181,117 @@ namespace Flow.Launcher.Helper
             }
         }
 
-    } 
+    }
 
-    public interface ISingleInstanceApp 
-    { 
-         void OnSecondAppStarted(); 
-    } 
+    public interface ISingleInstanceApp
+    {
+        void OnSecondAppStarted();
+    }
 
     /// <summary>
-    /// This class checks to make sure that only one instance of 
-    /// this application is running at a time.
+    /// 此类检查以确保一次仅运行此应用程序的一个实例
     /// </summary>
     /// <remarks>
-    /// Note: this class should be used with some caution, because it does no
-    /// security checking. For example, if one instance of an app that uses this class
-    /// is running as Administrator, any other instance, even if it is not
-    /// running as Administrator, can activate it with command line arguments.
-    /// For most apps, this will not be much of an issue.
+    /// 应谨慎使用此类，因为它不进行安全检查。
+    /// 例如：
+    ///     如果使用此类的应用程序的一个实例以管理员身份运行，
+    ///     则任何其他实例，即使它不是以管理员身份运行，
+    ///     也可以使用命令行参数激活它。 
+    /// 对于大多数应用程序来说，这不是什么大问题
     /// </remarks>
-    public static class SingleInstance<TApplication>  
-                where   TApplication: Application ,  ISingleInstanceApp 
-                                    
+    public static class SingleInstance<TApplication> where TApplication : Application, ISingleInstanceApp
     {
-        #region Private Fields
-
+        #region 常量
         /// <summary>
-        /// String delimiter used in channel names.
+        /// 通道名称中使用的字符串分隔符
         /// </summary>
         private const string Delimiter = ":";
-
         /// <summary>
-        /// Suffix to the channel name.
+        /// 频道名称的后缀
         /// </summary>
         private const string ChannelNameSuffix = "SingeInstanceIPCChannel";
-
-        /// <summary>
-        /// Application mutex.
-        /// </summary>
-        internal static Mutex singleInstanceMutex;
-
         #endregion
 
-        #region Public Properties
-
+        #region 字段
+        /// <summary>
+        /// 应用程序互斥锁
+        /// </summary>
+        private static Mutex _singleInstanceMutex;
         #endregion
 
-        #region Public Methods
-
+        #region 方法
+        #region 公开
+        #region 静态
         /// <summary>
-        /// Checks if the instance of the application attempting to start is the first instance. 
-        /// If not, activates the first instance.
+        /// 检查尝试启动的应用程序实例是否是第一个实例。 如果没有，则激活第一个实例。
         /// </summary>
-        /// <returns>True if this is the first instance of the application.</returns>
-        public static bool InitializeAsFirstInstance( string uniqueName )
+        /// <returns>如果这是应用程序的第一个实例，则为真</returns>
+        public static bool InitializeAsFirstInstance(string uniqueName)
         {
-            // Build unique application Id and the IPC channel name.
+            // 构建唯一的应用程序 ID 和 IPC 通道名称
             string applicationIdentifier = uniqueName + Environment.UserName;
+            string channelName = string.Concat(applicationIdentifier, Delimiter, ChannelNameSuffix);
 
-            string channelName = String.Concat(applicationIdentifier, Delimiter, ChannelNameSuffix);
+            // 根据唯一的应用程序 ID 创建互斥锁，以检查这是否是应用程序的第一个实例
+            _singleInstanceMutex = new Mutex(true, applicationIdentifier, out bool firstInstance);
+            _ = firstInstance ? CreateRemoteServiceAsync(channelName) : SignalFirstInstanceAsync(channelName);
+            return firstInstance;
 
-            // Create mutex based on unique application Id to check if this is the first instance of the application. 
-            bool firstInstance;
-            singleInstanceMutex = new Mutex(true, applicationIdentifier, out firstInstance);
-            if (firstInstance)
+            // 创建远程服务，等待该程序再次启动时连接
+            static async Task CreateRemoteServiceAsync(string channelName)
             {
-                _ = CreateRemoteService(channelName);
-                return true;
+                using NamedPipeServerStream pipeServer = new(channelName, PipeDirection.In);
+                while (true)
+                {
+                    // 等待连接
+                    await pipeServer.WaitForConnectionAsync();
+                    // 使用Ui线程执行 LaunchAppSecondTime ,当前线程同步等待
+                    if (Application.Current != null) Application.Current.Dispatcher.Invoke(LaunchAppSecondTime);
+                    // 断开本次连接
+                    pipeServer.Disconnect();
+                }
             }
-            else
+
+            // 向第一个实例发送信号
+            static async Task SignalFirstInstanceAsync(string channelName)
             {
-                _ = SignalFirstInstance(channelName);
-                return false;
+                // 创建连接到服务器的客户端管道
+                using NamedPipeClientStream pipeClient = new(".", channelName, PipeDirection.Out);
+                // 连接到可用管道
+                await pipeClient.ConnectAsync(0);
             }
         }
 
         /// <summary>
-        /// Cleans up single-instance code, clearing shared resources, mutexes, etc.
+        /// 清理单实例代码，清理共享资源，互斥体等
         /// </summary>
         public static void Cleanup()
         {
-            singleInstanceMutex?.ReleaseMutex();
+            _singleInstanceMutex?.ReleaseMutex();
         }
-
+        #endregion
         #endregion
 
-        #region Private Methods
+        #region 私有
+        #region 静态
+        /// <summary>
+        /// 第二次启动程序
+        /// </summary>
+        private static void LaunchAppSecondTime()
+        {
+            if (Application.Current is null) return;
+            // 执行程序的第二次启动
+            ((TApplication)Application.Current).OnSecondAppStarted();
+        }
+        #endregion
+        #endregion
 
+        #region 没理解到用处的(或者觉得没用)
         /// <summary>
         /// Gets command line args - for ClickOnce deployed applications, command line args may not be passed directly, they have to be retrieved.
         /// </summary>
         /// <returns>List of command line arg strings.</returns>
-        private static IList<string> GetCommandLineArgs( string uniqueApplicationName )
+        private static IList<string> GetCommandLineArgs(string uniqueApplicationName)
         {
             string[] args = null;
 
@@ -282,7 +302,7 @@ namespace Flow.Launcher.Helper
             }
             catch (NotSupportedException)
             {
-              
+
                 // The application was clickonce deployed
                 // Clickonce deployed apps cannot recieve traditional commandline arguments
                 // As a workaround commandline arguments can be written to a shared location before 
@@ -318,72 +338,16 @@ namespace Flow.Launcher.Helper
         }
 
         /// <summary>
-        /// Creates a remote server pipe for communication. 
-        /// Once receives signal from client, will activate first instance.
-        /// </summary>
-        /// <param name="channelName">Application's IPC channel name.</param>
-        private static async Task CreateRemoteService(string channelName)
-        {
-            using (NamedPipeServerStream pipeServer = new NamedPipeServerStream(channelName, PipeDirection.In))
-            {
-                while(true)
-                {
-                    // Wait for connection to the pipe
-                    await pipeServer.WaitForConnectionAsync();
-                    if (Application.Current != null)
-                    {
-                        // Do an asynchronous call to ActivateFirstInstance function
-                        Application.Current.Dispatcher.Invoke(ActivateFirstInstance);
-                    }
-                    // Disconect client
-                    pipeServer.Disconnect();
-                }
-            }
-        }
-
-        /// <summary>
-        /// Creates a client pipe and sends a signal to server to launch first instance
-        /// </summary>
-        /// <param name="channelName">Application's IPC channel name.</param>
-        /// <param name="args">
-        /// Command line arguments for the second instance, passed to the first instance to take appropriate action.
-        /// </param>
-        private static async Task SignalFirstInstance(string channelName)
-        {
-            // Create a client pipe connected to server
-            using (NamedPipeClientStream pipeClient = new NamedPipeClientStream(".", channelName, PipeDirection.Out))
-            {
-                // Connect to the available pipe
-                await pipeClient.ConnectAsync(0);
-            }
-        }
-
-        /// <summary>
         /// Callback for activating first instance of the application.
         /// </summary>
         /// <param name="arg">Callback argument.</param>
         /// <returns>Always null.</returns>
         private static object ActivateFirstInstanceCallback(object o)
         {
-            ActivateFirstInstance();
+            LaunchAppSecondTime();
             return null;
         }
-
-        /// <summary>
-        /// Activates the first instance of the application with arguments from a second instance.
-        /// </summary>
-        /// <param name="args">List of arguments to supply the first instance of the application.</param>
-        private static void ActivateFirstInstance()
-        {
-            // Set main window state and process command line args
-            if (Application.Current == null)
-            {
-                return;
-            }
-
-            ((TApplication)Application.Current).OnSecondAppStarted();
-        }
-
+        #endregion
         #endregion
     }
 }
